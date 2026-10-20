@@ -2585,7 +2585,7 @@ cmd_status() {
   command -v stow >/dev/null && ok "stow installed" || warn "stow missing (frame install takes care of it)"
 
   if command -v fc-list >/dev/null; then
-    fc-list | grep -qiE "jetbrains ?mono" && ok "Font JetBrains Mono installed" \
+    [[ -n $(fc-list | grep -iE "jetbrains ?mono") ]] && ok "Font JetBrains Mono installed" \
       || warn "Font JetBrains Mono missing, Spotify, Vesktop and GRUB need it (pacman -S ttf-jetbrains-mono)"
   fi
 
