@@ -800,6 +800,29 @@ post_vencord() {
   return 0
 }
 
+# Millennium reaches Steam through a link its package writes into Steam's runtime at install
+# time. Installed before Steam's first start (as frame install does on a new machine), that
+# folder does not exist yet and Steam runs without Millennium: no theme, no plugin.
+MILLENNIUM_BOOTSTRAP=/usr/lib/millennium/libmillennium_bootstrap_x86.so
+millennium_hook_missing() {
+  local hook="$HOME/.local/share/Steam/ubuntu12_32/libXtst.so.6"
+  [[ -f $MILLENNIUM_BOOTSTRAP && -d ${hook%/*} ]] || return 1
+  [[ $(readlink -f "$hook" 2>/dev/null) != "$MILLENNIUM_BOOTSTRAP" ]]
+}
+
+millennium_hook() {
+  millennium_hook_missing || return 0
+  local hook="$HOME/.local/share/Steam/ubuntu12_32/libXtst.so.6"
+  if command -v pgrep >/dev/null && pgrep -x steam >/dev/null; then
+    warn "Millennium is not hooked into Steam yet; close Steam and run: frame update steam"
+    return 0
+  fi
+  # The same two steps as the package's install script
+  run ln -sfn "$MILLENNIUM_BOOTSTRAP" "$hook"
+  run touch "$HOME/.steam/steam/.cef-enable-remote-debugging"
+  ok "Millennium hooked into Steam's runtime (start Steam to load it)"
+}
+
 # Steam's library and settings pages use hashed class names and literal colors, so the
 # theme cannot name them: frame-steam-css (steam package) reads the installed Steam's CSS
 # and writes generated.css with those classes in the theme's colors
@@ -839,6 +862,7 @@ post_steam() {
     warn "Millennium is not installed, Steam stays as it is (paru -S millennium)"
     return 0
   fi
+  millennium_hook
 
   if command -v pgrep >/dev/null && pgrep -x steam >/dev/null; then
     # The plugin link reloads Steam's UI
@@ -2605,6 +2629,14 @@ cmd_status() {
   if command -v fc-list >/dev/null; then
     [[ -n $(fc-list | grep -iE "jetbrains ?mono") ]] && ok "Font JetBrains Mono installed" \
       || warn "Font JetBrains Mono missing, Spotify, Vesktop and GRUB need it (pacman -S ttf-jetbrains-mono)"
+  fi
+
+  if has_pkg millennium || has_pkg millennium-bin; then
+    if millennium_hook_missing; then
+      warn "Millennium is installed but not hooked into Steam (close Steam, then: frame update steam)"
+    else
+      ok "Millennium hooked into Steam"
+    fi
   fi
 
   [[ -f $ASSETS_DIR/logo.png ]] && ok "fastfetch logo found" \
