@@ -800,12 +800,26 @@ post_vencord() {
   return 0
 }
 
+# Steam's library and settings pages use hashed class names and literal colors, so the
+# theme cannot name them: frame-steam-css (steam package) reads the installed Steam's CSS
+# and writes generated.css with those classes in the theme's colors
+steam_css() {
+  local bin="$HOME/.local/bin/frame-steam-css"
+  [[ -x $bin && -f $HOME/.local/share/Steam/steamui/css/sp.css ]] || return 0
+  if run_quiet "$bin"; then
+    ok "Steam: library colors generated from Steam's own CSS (frame-steam-css)"
+  else
+    warn "Steam: frame-steam-css failed, the library keeps Steam's colors"
+  fi
+}
+
 # Millennium: the Frameshell theme and the frameshell plugin, which moves Steam's
 # notifications into the shell. A running Steam gets both over Millennium's steam://
 # links; otherwise they go into Millennium's config.json (only while Steam is closed,
 # it writes its own copy back).
 post_steam() {
   local config="${XDG_CONFIG_HOME:-$HOME/.config}/millennium/config.json" steam_dir
+  steam_css
 
   # Millennium reads themes from ~/.steam/steam/millennium/themes; the package links into
   # ~/.local/share/Steam, where that points on Arch. Another Steam folder gets a link.
@@ -1867,6 +1881,10 @@ theme_reload() {
       dolphin) info "Dolphin: restart it for the new colors" ;;
       zen) info "Zen: restart it for the new colors" ;;
       keyboard) keyboard_theme ;;
+      steam)
+        steam_css
+        info "Steam: restart it for the new colors"
+        ;;
     esac
   done
   if command -v curl >/dev/null && [[ -n $(goxlr_serial) ]]; then
