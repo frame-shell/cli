@@ -5,13 +5,14 @@ function __frame_list
     frame __complete $argv 2>/dev/null
 end
 
-set -l commands install update remove backup restore theme grub boot goxlr login wallpaper spotify layout status clean help
+set -l commands install add update remove backup restore theme grub boot goxlr login wallpaper spotify layout status clean help
 
 complete -c frame -f
 complete -c frame -s n -l dry-run -d "print what would happen, change nothing"
 complete -c frame -s y -l yes -d "do not ask for confirmation"
 
-complete -c frame -n "not __fish_seen_subcommand_from $commands" -a install -d "install dependencies and link configs"
+complete -c frame -n "not __fish_seen_subcommand_from $commands" -a install -d "the setup, or just some modules"
+complete -c frame -n "not __fish_seen_subcommand_from $commands" -a add -d "fetch and set up a module"
 complete -c frame -n "not __fish_seen_subcommand_from $commands" -a update -d "pull, back up, relink, re-apply themes"
 complete -c frame -n "not __fish_seen_subcommand_from $commands" -a remove -d "unlink configs"
 complete -c frame -n "not __fish_seen_subcommand_from $commands" -a backup -d "snapshot configs and app settings"
@@ -28,8 +29,9 @@ complete -c frame -n "not __fish_seen_subcommand_from $commands" -a status -d "w
 complete -c frame -n "not __fish_seen_subcommand_from $commands" -a clean -d "free disk space"
 complete -c frame -n "not __fish_seen_subcommand_from $commands" -a help -d "all commands"
 
-complete -c frame -n "__fish_seen_subcommand_from install update backup" -a "(__frame_list packages)"
-complete -c frame -n "__fish_seen_subcommand_from remove" -a "(__frame_list installed)"
+complete -c frame -n "__fish_seen_subcommand_from install add update backup" -a "(__frame_list modules)" -d module
+complete -c frame -n "__fish_seen_subcommand_from install update backup" -a "(__frame_list packages)" -d package
+complete -c frame -n "__fish_seen_subcommand_from remove" -a "(__frame_list modules) (__frame_list installed)"
 complete -c frame -n "__fish_seen_subcommand_from restore" -a "latest (__frame_list backups)"
 
 # theme: the actions, and the names (frame theme sakura works too); after set only names

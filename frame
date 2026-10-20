@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # frame – install and manage frameshell, a terminal-styled desktop for CachyOS + Hyprland
 #
-#   frame install [package...]   install dependencies and link configs (default: all)
-#   frame update  [package...]   git pull, back up, relink and re-apply app themes
-#   frame remove  <package...>   unlink configs (dependencies stay installed)
+#   frame install [module...]    the setup (no names), or just these modules
+#   frame add <module...>        fetch and set up a module later (steam, spotify, keyboard, …)
+#   frame update  [module...]    pull the CLI and the modules, back up, relink, re-apply themes
+#   frame remove  <module...>    unlink a module and delete it (dependencies stay installed)
 #   frame backup  [package...]   snapshot the current configs and app settings
 #   frame restore [name|latest]  list backups, or put one back
 #   frame theme [list|set <name>|check]
@@ -31,6 +32,66 @@ GRUB_DEFAULT_FILE="/etc/default/grub"
 VENCORD_SRC="${XDG_DATA_HOME:-$HOME/.local/share}/frameshell/vencord"
 THEME_STATE="$STATE_DIR/theme"
 DEFAULT_THEME=periwinkle
+
+# ── Modules ──────────────────────────────────────────────────
+# frameshell is split into repos (github.com/frame-shell): this CLI with the themes, and
+# one repo per module. Only the modules you pick are cloned (shallow) into MODULES_DIR;
+# each holds one or more Stow packages plus templates/ for the files with colors.
+ORG_URL="${FRAME_ORG_URL:-https://github.com/frame-shell}"
+DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/frameshell"
+MODULES_DIR="$DATA_DIR/modules"
+# Your own pictures (fastfetch logo, wallpapers); never part of a repo
+ASSETS_DIR="$DATA_DIR/assets"
+
+MODULES=(shell terminal spotify discord steam keyboard zed zen dolphin)
+declare -A MODULE_OF=(
+  [quickshell]=shell [hypr]=shell [wallpaper]=shell [gtk]=shell
+  [ghostty]=terminal [fish]=terminal [starship]=terminal [fastfetch]=terminal
+  [spicetify]=spotify [vencord]=discord [steam]=steam [keyboard]=keyboard
+  [zed]=zed [zen]=zen [dolphin]=dolphin
+)
+declare -A MODULE_DESC=(
+  [shell]="the desktop: bar, launcher, lockscreen, Hyprland config, wallpapers, login and boot screens"
+  [terminal]="Ghostty, fish, Starship, fastfetch"
+  [spotify]="Spotify themed, search and controls in the launcher"
+  [discord]="Vesktop themed, calls and DMs in the shell"
+  [steam]="Steam themed through Millennium, its popups in the shell"
+  [keyboard]="keyboard lighting and keys (AULA F75)"
+  [zed]="Zed themed"
+  [zen]="Zen themed, with the start page"
+  [dolphin]="Dolphin and Qt apps themed"
+)
+
+module_dir() { echo "$MODULES_DIR/$1"; }
+# A package's folder inside its module
+pkg_dir() { echo "$MODULES_DIR/${MODULE_OF[$1]}/$1"; }
+has_module() { [[ -d $MODULES_DIR/$1/.git ]]; }
+installed_modules() {
+  local m
+  for m in "${MODULES[@]}"; do has_module "$m" && echo "$m"; done
+  return 0
+}
+is_module() {
+  local m
+  for m in "${MODULES[@]}"; do [[ $m == "$1" ]] && return 0; done
+  return 1
+}
+# Packages of a module, in PACKAGES order
+module_packages() {
+  local p
+  for p in "${PACKAGES[@]}"; do [[ ${MODULE_OF[$p]} == "$1" ]] && echo "$p"; done
+  return 0
+}
+
+# Clones a module the first time it is needed (shallow: only the newest version)
+ensure_module() {
+  local m=$1
+  has_module "$m" && return 0
+  info "Getting the $m module"
+  run mkdir -p "$MODULES_DIR"
+  run git clone --depth 1 --quiet "$ORG_URL/$m.git" "$(module_dir "$m")" \
+    || die "Could not get $ORG_URL/$m"
+}
 
 PACKAGES=(ghostty fish starship fastfetch spicetify vencord steam quickshell hypr wallpaper keyboard gtk zed dolphin zen)
 
@@ -294,13 +355,14 @@ choose() {
 usage() {
   header
   cat <<EOF
-  ${c_bold}Usage${c_reset}  frame <command> [package...] [options]
+  ${c_bold}Usage${c_reset}  frame <command> [module...] [options]
 
   ${c_bold}Commands${c_reset}
-    install [pkg...]      install dependencies and link configs (default: all)
-    update  [pkg...]      git pull, back up, relink and re-apply app themes
+    install [module...]   the setup (no names), or just these modules
+    add <module...>       fetch and set up a module later
+    update  [module...]   pull the CLI and the modules, back up, relink, re-apply themes
                           (run "frame update spicetify" after a Spotify update)
-    remove  <pkg...>      unlink configs, dependencies stay installed
+    remove  <module...>   unlink a module and delete it, dependencies stay installed
     backup  [pkg...]      snapshot the current configs and app settings
     restore [name|latest] list backups, or put one back
     theme                 write every app color file from the active theme
@@ -323,6 +385,7 @@ usage() {
     -n, --dry-run         print what would happen, change nothing
     -y, --yes             do not ask for confirmation
 
+  ${c_bold}Modules${c_reset}   ${MODULES[*]}
   ${c_bold}Packages${c_reset}  ${PACKAGES[*]}
   ${c_bold}Themes${c_reset}    $(theme_ids | tr '\n' ' ')
 
@@ -417,8 +480,8 @@ pkg_root() {
 
 # Files of a package, relative to the package root
 pkg_files() {
-  [[ -d $REPO/$1 ]] || return 0
-  (cd "$REPO/$1" && find . \( -type f -o -type l \) | sed 's|^\./||' | sort)
+  [[ -d $(pkg_dir "$1") ]] || return 0
+  (cd "$(pkg_dir "$1")" && find . \( -type f -o -type l \) | sed 's|^\./||' | sort)
 }
 
 # Repo files plus the app files listed in EXTRAS, relative to $HOME (for backups)
@@ -433,12 +496,13 @@ managed_files() {
 
 # Prints linked, partial or missing
 link_state() {
-  local pkg=$1 f root total=0 linked=0
+  local pkg=$1 f root total=0 linked=0 dir
   root="$(pkg_root "$pkg")"
   [[ -n $root ]] || { echo missing; return 0; }
+  dir=$(readlink -f "$(pkg_dir "$pkg")" 2>/dev/null || pkg_dir "$pkg")
   while IFS= read -r f; do
     total=$((total + 1))
-    if [[ -L $root/$f && "$(readlink -f "$root/$f")" == "$REPO/$pkg/$f" ]]; then
+    if [[ -L $root/$f && "$(readlink -f "$root/$f")" == "$dir/$f" ]]; then
       linked=$((linked + 1))
     fi
   done < <(pkg_files "$pkg")
@@ -484,12 +548,13 @@ snapshot_pkgs() {
 
 # Moves existing files that would block stow into the backup folder
 backup_conflicts() {
-  local pkg=$1 dest=$2 f target root
+  local pkg=$1 dest=$2 f target root dir
   root="$(pkg_root "$pkg")"
+  dir=$(readlink -f "$(pkg_dir "$pkg")" 2>/dev/null || pkg_dir "$pkg")
   while IFS= read -r f; do
     target="$root/$f"
     [[ -e $target || -L $target ]] || continue
-    [[ "$(readlink -f "$target")" == "$REPO/$pkg/$f" ]] && continue
+    [[ "$(readlink -f "$target")" == "$dir/$f" ]] && continue
     warn "Backing up existing ~/$f"
     run mkdir -p "$dest/$(dirname "$f")"
     run mv "$target" "$dest/$f"
@@ -500,7 +565,7 @@ backup_conflicts() {
 stow_pkg() {
   local root
   root="$(pkg_root "$2")"
-  run stow --no-folding -d "$REPO" -t "$root" "$1" "$2"
+  run stow --no-folding -d "$(module_dir "${MODULE_OF[$2]}")" -t "$root" "$1" "$2"
 }
 
 # Backs up whatever is in the way, then links the package; skips packages whose
@@ -554,7 +619,8 @@ link_completions() {
 # Lists for the completions: frame __complete commands|packages|installed|themes|backups
 cmd_complete() {
   case ${1:-} in
-    commands) printf '%s\n' install update remove backup restore theme grub boot goxlr login wallpaper spotify layout status clean help ;;
+    commands) printf '%s\n' install add update remove backup restore theme grub boot goxlr login wallpaper spotify layout status clean help ;;
+    modules) printf '%s\n' "${MODULES[@]}" ;;
     packages) printf '%s\n' "${PACKAGES[@]}" ;;
     installed) installed_packages ;;
     themes) theme_ids ;;
@@ -576,7 +642,7 @@ post_fish() {
 }
 
 post_fastfetch() {
-  if [[ ! -f $REPO/assets/logo.png ]]; then
+  if [[ ! -f $ASSETS_DIR/logo.png ]]; then
     warn "No logo at assets/logo.png, fastfetch shows the distro logo instead"
     info "Put a PNG of your choice there (the folder is git-ignored)"
   fi
@@ -643,7 +709,7 @@ json_edit() {
 # plugin changed.
 
 vencord_plugin_hash() {
-  (cd "$REPO/vencord/plugins" && find shellBridge -type f -print0 | sort -z | xargs -0 sha1sum) | sha1sum | cut -c1-12
+  (cd "$(pkg_dir vencord)/plugins" && find shellBridge -type f -print0 | sort -z | xargs -0 sha1sum) | sha1sum | cut -c1-12
 }
 
 vencord_build() {
@@ -665,7 +731,7 @@ vencord_build() {
 
   run rm -rf "$VENCORD_SRC/src/userplugins/shellBridge"
   run mkdir -p "$VENCORD_SRC/src/userplugins"
-  run cp -r "$REPO/vencord/plugins/shellBridge" "$VENCORD_SRC/src/userplugins/shellBridge"
+  run cp -r "$(pkg_dir vencord)/plugins/shellBridge" "$VENCORD_SRC/src/userplugins/shellBridge"
   info "Building Vencord, this takes about a minute"
   if run pnpm -C "$VENCORD_SRC" install --frozen-lockfile --silent && run pnpm -C "$VENCORD_SRC" build; then
     # A build that silently left the plugin out is worse than a failed one
@@ -751,7 +817,7 @@ post_steam() {
     else
       info "Steam lives in $steam_dir, linking the theme there too"
       run mkdir -p "$steam_dir/millennium/themes"
-      run ln -sfn "$REPO/steam/.local/share/Steam/millennium/themes/Frameshell" "$target"
+      run ln -sfn "$(pkg_dir steam)/.local/share/Steam/millennium/themes/Frameshell" "$target"
     fi
   fi
 
@@ -897,9 +963,9 @@ post_zen() {
   info "Profile: ${profile/#"$HOME"/\~}"
   # The start page lives at a fixed place, so the home page pref does not depend on the profile
   local page="${XDG_DATA_HOME:-$HOME/.local/share}/frameshell/startpage.html"
-  if [[ "$(readlink -f "$page" 2>/dev/null)" != "$REPO/zen/startpage.html" ]]; then
+  if [[ "$(readlink -f "$page" 2>/dev/null)" != "$(pkg_dir zen)/startpage.html" ]]; then
     run mkdir -p "$(dirname "$page")"
-    run ln -sf "$REPO/zen/startpage.html" "$page"
+    run ln -sf "$(pkg_dir zen)/startpage.html" "$page"
     ok "Start page: ${page/#"$HOME"/\~} (Zen's home page)"
   fi
   if command -v pgrep >/dev/null && pgrep -x zen-bin >/dev/null; then
@@ -965,7 +1031,7 @@ keyboard_connected() {
 # The udev rule lets frame-keyboard reach the keyboard without root; it goes to
 # /etc/udev/rules.d only when it is missing or changed, so updates ask for sudo once
 post_keyboard() {
-  local src="$REPO/keyboard/.local/share/frameshell/udev/$KEYBOARD_RULE" dest="/etc/udev/rules.d/$KEYBOARD_RULE"
+  local src="$(pkg_dir keyboard)/.local/share/frameshell/udev/$KEYBOARD_RULE" dest="/etc/udev/rules.d/$KEYBOARD_RULE"
   if cmp -s "$src" "$dest"; then
     ok "udev rule in place ($dest)"
   else
@@ -985,7 +1051,7 @@ post_keyboard() {
 
 # The keyboard app is live once keyboardLive is true in Config.qml (after the first test)
 keyboard_live() {
-  grep -qsE '^\s*readonly property bool keyboardLive: true' "$REPO/quickshell/.config/quickshell/config/Config.qml"
+  grep -qsE '^\s*readonly property bool keyboardLive: true' "$(pkg_dir quickshell)/.config/quickshell/config/Config.qml"
 }
 
 # New theme, new key colors. They are saved on the keyboard, so this only runs on a theme
@@ -1155,7 +1221,7 @@ grub_apply() {
   theme=$(current_theme)
   line_color=$(theme_hex "$theme" surface2)
   select_color=$(theme_hex "$theme" primary)
-  [[ -f $REPO/grub/frameshell/theme.txt ]] || theme_render "$theme" 0 quiet
+  [[ -f $(module_dir shell)/grub/frameshell/theme.txt ]] || theme_render "$theme" 0 quiet
   for f in border select_c select_e select_n select_ne select_s select_se; do
     png_solid "$tmp/$f.png" 1 "$line_color"
   done
@@ -1164,7 +1230,7 @@ grub_apply() {
     png_solid "$tmp/$f.png" 3 "$select_color"
   done
   run sudo install -d "$GRUB_THEME_DIR"
-  run sudo cp "$REPO/grub/frameshell/theme.txt" "$tmp"/*.png "$tmp"/*.pf2 "$GRUB_THEME_DIR/"
+  run sudo cp "$(module_dir shell)/grub/frameshell/theme.txt" "$tmp"/*.png "$tmp"/*.pf2 "$GRUB_THEME_DIR/"
   rm -rf "$tmp"
   ok "Copied to $GRUB_THEME_DIR"
 
@@ -1334,7 +1400,7 @@ cmd_login() {
   [[ -f $GREETD_CONFIG ]] || die "greetd is not the display manager here ($GREETD_CONFIG is missing); frame login only knows greetd"
   case $action in
     install)
-      local user command theme_file="$REPO/quickshell/.config/quickshell/config/Theme.qml"
+      local user command theme_file="$(pkg_dir quickshell)/.config/quickshell/config/Theme.qml"
       user=$(id -un)
       command=$(login_session_command)
       # Everything the greeter needs, checked before greetd is touched: a broken greeter
@@ -1353,11 +1419,11 @@ cmd_login() {
       confirm "Set up the lockscreen look as the login screen?" || exit 0
       step "Greeter files"
       run sudo install -d -m 755 "$GREETER_DIR" "$GREETER_DIR/ui"
-      run sudo install -m 644 "$REPO/greeter/shell.qml" "$GREETER_DIR/shell.qml"
-      run sudo install -m 644 "$REPO/greeter/ui/Frame.qml" "$GREETER_DIR/ui/Frame.qml"
+      run sudo install -m 644 "$(module_dir shell)/greeter/shell.qml" "$GREETER_DIR/shell.qml"
+      run sudo install -m 644 "$(module_dir shell)/greeter/ui/Frame.qml" "$GREETER_DIR/ui/Frame.qml"
       # The active theme, as the shell has it rendered right now
-      run sudo install -m 644 "$REPO/quickshell/.config/quickshell/config/Theme.qml" "$GREETER_DIR/ui/Theme.qml"
-      run sudo install -m 755 "$REPO/greeter/frame-greeter-session" "$GREETER_DIR/frame-greeter-session"
+      run sudo install -m 644 "$(pkg_dir quickshell)/.config/quickshell/config/Theme.qml" "$GREETER_DIR/ui/Theme.qml"
+      run sudo install -m 755 "$(module_dir shell)/greeter/frame-greeter-session" "$GREETER_DIR/frame-greeter-session"
       local tmp
       tmp=$(mktemp)
       printf '{ "user": "%s", "command": ["%s"] }\n' "$user" "$command" >"$tmp"
@@ -1451,7 +1517,7 @@ boot_splash_install() {
   fi
   local theme tmp f
   theme=$(current_theme)
-  [[ -f $REPO/plymouth/frameshell/frameshell.script ]] || theme_render "$theme" 0 quiet
+  [[ -f $(module_dir shell)/plymouth/frameshell/frameshell.script ]] || theme_render "$theme" 0 quiet
   tmp=$(mktemp -d)
   png_solid "$tmp/line.png" 1 "$(theme_hex "$theme" frame)"
   png_solid "$tmp/fill.png" 1 "$(theme_hex "$theme" primary)"
@@ -1459,7 +1525,7 @@ boot_splash_install() {
   png_solid "$tmp/bg.png" 1 "$(theme_hex "$theme" bg)"
   run sudo install -d "$PLYMOUTH_DIR"
   for f in frameshell.plymouth frameshell.script; do
-    run sudo install -m 644 "$REPO/plymouth/frameshell/$f" "$PLYMOUTH_DIR/$f"
+    run sudo install -m 644 "$(module_dir shell)/plymouth/frameshell/$f" "$PLYMOUTH_DIR/$f"
   done
   run sudo install -m 644 "$tmp"/*.png "$PLYMOUTH_DIR/"
   rm -rf "$tmp"
@@ -1590,13 +1656,14 @@ cmd_grub() {
 
 # ── Theme ────────────────────────────────────────────────────
 # themes/<name>.json holds a theme: the same color roles for all of them, the 16
-# terminal colors and the fonts. themes/templates/<package>/<path> are the app files
+# terminal colors and the fonts. Each module keeps templates/<package>/<path>: its app files
 # with placeholders like {{colors.primary}}, {{ansi.4}} or {{colors.bg|lighten:8|rgb}}.
-# frame theme fills them in and writes <package>/<path>. Those outputs are git-ignored,
-# so switching themes never shows up as a change in the repo; install and update
+# frame theme fills them in and writes <package>/<path> inside the module. Those outputs are
+# git-ignored, so switching themes never shows up as a change in a repo; install and update
 # write them before linking.
 
-TEMPLATE_DIR="$REPO/themes/templates"
+# Set per module while rendering (theme_render); render_template names files relative to it
+TEMPLATE_DIR=""
 declare -A PALETTE=()
 
 # Theme names, from the files in themes/
@@ -1713,10 +1780,15 @@ render_template() {
   done <"$file"
 }
 
-# Template paths relative to themes/templates, e.g. zed/.config/zed/themes/frameshell.json
+# Every installed module's templates: "<module> TAB <path>", the path relative to
+# <module>/templates, which is also where the file goes inside the module
 theme_templates() {
-  [[ -d $TEMPLATE_DIR ]] || return 0
-  (cd "$TEMPLATE_DIR" && find . -type f | sed 's|^\./||' | sort)
+  local m dir
+  while IFS= read -r m; do
+    dir="$(module_dir "$m")/templates"
+    [[ -d $dir ]] || continue
+    (cd "$dir" && find . -type f | sed "s|^\./|$m\t|" | sort)
+  done < <(installed_modules)
 }
 
 # theme_render <name> <check: 0|1> [quiet]: writes (or only compares) every output file
@@ -1732,29 +1804,31 @@ theme_render() {
   load_palette "$id"
   [[ -n $quiet ]] || step "Theme ${PALETTE[name]} (themes/$id.json)"
 
-  local rel pkg tmp state mark color written=0 stale=0 total=0
+  local m rel base pkg tmp state mark color written=0 stale=0 total=0
   tmp="$(mktemp)"
-  while IFS= read -r rel; do
+  while IFS=$'\t' read -r m rel; do
     total=$((total + 1))
+    base=$(module_dir "$m")
     pkg=${rel%%/*}
+    TEMPLATE_DIR="$base/templates"
     if ! render_template "$TEMPLATE_DIR/$rel" >"$tmp"; then
       rm -f "$tmp"
-      die "Could not render themes/templates/$rel"
+      die "Could not render $m/templates/$rel"
     fi
-    if [[ -f $REPO/$rel ]] && cmp -s "$tmp" "$REPO/$rel"; then
+    if [[ -f $base/$rel ]] && cmp -s "$tmp" "$base/$rel"; then
       state=unchanged color=$c_ok mark=✓
     elif ((check)); then
       state="out of date" color=$c_warn mark=! stale=$((stale + 1))
     else
-      run mkdir -p "$(dirname "$REPO/$rel")"
-      run cp "$tmp" "$REPO/$rel"
+      run mkdir -p "$(dirname "$base/$rel")"
+      run cp "$tmp" "$base/$rel"
       state=written color=$c_warn mark=↻ written=$((written + 1))
     fi
     [[ -n $quiet ]] || printf '  %s%s%s %-11s %-50s %s%s%s\n' "$color" "$mark" "$c_reset" "$pkg" "${rel#*/}" "$c_muted" "$state" "$c_reset"
-    # Outputs must stay out of git, or every theme switch would be a change in the repo
-    if ((!check)) && [[ -d $REPO/.git ]] && command -v git >/dev/null \
-      && ! git -C "$REPO" check-ignore -q -- "$rel" 2>/dev/null; then
-      warn "$rel is not in .gitignore"
+    # Outputs must stay out of git, or every theme switch would be a change in the module
+    if ((!check)) && [[ -d $base/.git ]] && command -v git >/dev/null \
+      && ! git -C "$base" check-ignore -q -- "$rel" 2>/dev/null; then
+      warn "$m/$rel is not in .gitignore"
     fi
   done < <(theme_templates)
   rm -f "$tmp"
@@ -1806,7 +1880,7 @@ theme_reload() {
   fi
   # The login screen keeps its own copy of the theme in /usr/share
   if [[ -d $GREETER_DIR ]] && ((!DRY_RUN)); then
-    if sudo -n install -m 644 "$REPO/quickshell/.config/quickshell/config/Theme.qml" "$GREETER_DIR/ui/Theme.qml" 2>/dev/null; then
+    if sudo -n install -m 644 "$(pkg_dir quickshell)/.config/quickshell/config/Theme.qml" "$GREETER_DIR/ui/Theme.qml" 2>/dev/null; then
       ok "Login screen colors updated"
     else
       info "Login screen: run frame login to give it the new colors (needs sudo)"
@@ -1973,14 +2047,14 @@ png_solid() {
 # Hands everything to the wallpaper helper: frame wallpaper backend mpv, … set <file>, …
 cmd_wallpaper() {
   local bin="$HOME/.local/bin/frame-wallpaper"
-  [[ -x $bin ]] || bin="$REPO/wallpaper/.local/bin/frame-wallpaper"
+  [[ -x $bin ]] || bin="$(pkg_dir wallpaper)/.local/bin/frame-wallpaper"
   exec "$bin" "$@"
 }
 
 # Hands everything to the Spotify Web API helper: frame spotify login, … status, … logout
 cmd_spotify() {
   local bin="$HOME/.local/bin/frame-spotify"
-  [[ -x $bin ]] || bin="$REPO/spicetify/.local/bin/frame-spotify"
+  [[ -x $bin ]] || bin="$(pkg_dir spicetify)/.local/bin/frame-spotify"
   exec "$bin" "$@"
 }
 
@@ -2029,16 +2103,24 @@ save_layout() {
   fi
 }
 
-# frame install without packages: everything at once, or app by app
+# frame install without packages: the desktop first, the apps are a separate choice so
+# only the modules that are wanted get downloaded
 setup_wizard() {
-  local mode o
+  local mode apps o
   mode=$(choose "What should be set up?" \
-    "full|everything: the shell plus Spotify, Vesktop, Steam, Zed, Dolphin, Zen and Claude Code" \
-    "pick|the shell, then each app with a yes or no" \
-    "shell|only the shell: terminal, prompt, bar, launcher, lockscreen, wallpapers")
-  SETUP_PKGS=("${CORE_PACKAGES[@]}")
-  case $mode in
-    full)
+    "full|the full desktop: bar, launcher, lockscreen, Hyprland, wallpapers, terminal and prompt" \
+    "shell|only the shell, without the terminal look (Ghostty, fish, Starship, fastfetch)")
+  if [[ $mode == shell ]]; then
+    mapfile -t SETUP_PKGS < <(module_packages shell)
+  else
+    SETUP_PKGS=("${CORE_PACKAGES[@]}")
+  fi
+  apps=$(choose "Apps? (add one any time: frame add <app>)" \
+    "pick|each app with a yes or no" \
+    "all|all of them: Spotify, Vesktop, Steam, Zed, Dolphin, Zen and Claude Code" \
+    "none|no apps for now")
+  case $apps in
+    all)
       for o in "${OPTIONAL_PACKAGES[@]}"; do SETUP_PKGS+=("${o%%|*}"); done
       WANT_CLAUDE=1
       ;;
@@ -2128,15 +2210,37 @@ cmd_layout() {
   return 0
 }
 
+# Package and module names as packages: "spotify" is the spicetify package, "shell" all of
+# quickshell, hypr, wallpaper and gtk
+expand_targets() {
+  local a
+  for a in "$@"; do
+    if is_module "$a"; then module_packages "$a"; else echo "$a"; fi
+  done | awk '!seen[$0]++'
+}
+
+# The modules these packages live in, each once
+modules_of() {
+  local p
+  for p in "$@"; do echo "${MODULE_OF[$p]}"; done | awk '!seen[$0]++'
+}
+
 cmd_install() {
   need_arch
-  local pkgs=("$@") p extra=()
+  local pkgs=() p m extra=()
+  mapfile -t pkgs < <(expand_targets "$@")
 
   header
   if ((${#pkgs[@]} == 0)); then
     setup_wizard
     pkgs=("${SETUP_PKGS[@]}")
   fi
+  # Only the modules that are picked get cloned
+  command -v git >/dev/null || install_deps git
+  step "Modules"
+  while IFS= read -r m; do
+    if has_module "$m"; then ok "$m is there"; else ensure_module "$m" && ok "$m"; fi
+  done < <(modules_of "${pkgs[@]}")
   # spicetify themes a Spotify that has to be there; the AUR one lives in /opt/spotify
   if [[ " ${pkgs[*]} " == *" spicetify "* ]] && ! command -v spotify >/dev/null && ! command -v spotify-launcher >/dev/null; then
     extra+=(spotify)
@@ -2192,9 +2296,26 @@ cmd_update() {
 
   header
   if ((!NO_PULL)); then
-    step "frameshell"
+    # The modules first: the CLI below may restart itself with --no-pull
+    step "Modules"
+    local m mod_before
+    while IFS= read -r m; do
+      if [[ -n $(git -C "$(module_dir "$m")" status --porcelain --untracked-files=no) ]]; then
+        warn "$m has local changes, left as it is ($(module_dir "$m"))"
+        continue
+      fi
+      mod_before=$(git -C "$(module_dir "$m")" rev-parse --short HEAD)
+      if run_quiet git -C "$(module_dir "$m")" pull --ff-only --quiet; then
+        [[ $(git -C "$(module_dir "$m")" rev-parse --short HEAD) == "$mod_before" ]] \
+          && ok "$m up to date" || ok "$m updated"
+      else
+        warn "Could not update $m"
+      fi
+    done < <(installed_modules)
+
+    step "frame"
     [[ -z $(git -C "$REPO" status --porcelain --untracked-files=no) ]] \
-      || die "The repo has local changes. Commit or stash them first (cd $REPO)."
+      || die "The CLI has local changes. Commit or stash them first (cd $REPO)."
     local before after
     before=$(git -C "$REPO" rev-parse HEAD)
     run git -C "$REPO" pull --ff-only
@@ -2238,18 +2359,32 @@ cmd_update() {
 }
 
 cmd_remove() {
-  (($#)) || die "Name the packages to remove, e.g.: frame remove spicetify"
+  (($#)) || die "Name the modules or packages to remove, e.g.: frame remove spotify"
   command -v stow >/dev/null || ((DRY_RUN)) || die "stow is not installed"
-  local p
-  for p in "$@"; do
+  local p m pkgs=()
+  mapfile -t pkgs < <(expand_targets "$@")
+  for p in "${pkgs[@]}"; do
     step "$p"
-    if [[ -z $(pkg_root "$p") ]]; then
+    if [[ -z $(pkg_root "$p") ]] || ! has_module "${MODULE_OF[$p]}"; then
       info "Nothing linked"
       continue
     fi
     stow_pkg -D "$p"
     ok "Config unlinked"
   done
+  # A module with nothing linked any more can go entirely, which is what saves the space
+  while IFS= read -r m; do
+    has_module "$m" || continue
+    local still=0
+    for p in $(module_packages "$m"); do
+      [[ $(link_state "$p") == missing ]] || still=1
+    done
+    ((still)) && continue
+    if confirm "Delete the $m module too ($(human_bytes "$(dir_bytes "$(module_dir "$m")")"), frame add $m brings it back)?"; then
+      run rm -rf "$(module_dir "$m")"
+      ok "Module $m deleted"
+    fi
+  done < <(modules_of "${pkgs[@]}")
   info "Backups of your old configs: frame restore"
 }
 
@@ -2407,21 +2542,28 @@ cmd_clean() {
 cmd_status() {
   header
   printf '  %s%-12s %-10s %s%s\n' "$c_muted" "PACKAGE" "CONFIG" "DEPENDENCIES" "$c_reset"
-  local p state d missing color
-  for p in "${PACKAGES[@]}"; do
-    state=$(link_state "$p")
-    missing=()
-    for d in ${DEPS[$p]}; do has_pkg "$d" || missing+=("$d"); done
-    case $state in
-      linked) color=$c_ok ;;
-      partial) color=$c_warn ;;
-      *) color=$c_muted ;;
-    esac
-    if ((${#missing[@]})); then
-      printf '  %-12s %s%-10s%s %smissing: %s%s\n' "$p" "$color" "$state" "$c_reset" "$c_danger" "${missing[*]}" "$c_reset"
-    else
-      printf '  %-12s %s%-10s%s %sok%s\n' "$p" "$color" "$state" "$c_reset" "$c_ok" "$c_reset"
+  local m p state d missing color
+  for m in "${MODULES[@]}"; do
+    if ! has_module "$m"; then
+      printf '  %s%-24s not downloaded (frame add %s)%s\n' "$c_muted" "$m" "$m" "$c_reset"
+      continue
     fi
+    printf '  %s%s%s%s %s%s%s\n' "$c_bold" "$c_primary" "$m" "$c_reset" "$c_muted" "$(git -C "$(module_dir "$m")" log -1 --format='%h %cr' 2>/dev/null)" "$c_reset"
+    while IFS= read -r p; do
+      state=$(link_state "$p")
+      missing=()
+      for d in ${DEPS[$p]}; do has_pkg "$d" || missing+=("$d"); done
+      case $state in
+        linked) color=$c_ok ;;
+        partial) color=$c_warn ;;
+        *) color=$c_muted ;;
+      esac
+      if ((${#missing[@]})); then
+        printf '    %-10s %s%-10s%s %smissing: %s%s\n' "$p" "$color" "$state" "$c_reset" "$c_danger" "${missing[*]}" "$c_reset"
+      else
+        printf '    %-10s %s%-10s%s %sok%s\n' "$p" "$color" "$state" "$c_reset" "$c_ok" "$c_reset"
+      fi
+    done < <(module_packages "$m")
   done
 
   step "Checks"
@@ -2433,7 +2575,7 @@ cmd_status() {
   if keyboard_connected; then
     if [[ $(link_state keyboard) != linked ]]; then
       warn "An AULA F75 is connected but the keyboard package is not installed (frame install keyboard)"
-    elif ! cmp -s "$REPO/keyboard/.local/share/frameshell/udev/$KEYBOARD_RULE" "/etc/udev/rules.d/$KEYBOARD_RULE"; then
+    elif ! cmp -s "$(pkg_dir keyboard)/.local/share/frameshell/udev/$KEYBOARD_RULE" "/etc/udev/rules.d/$KEYBOARD_RULE"; then
       warn "The keyboard's udev rule is missing or old (frame update keyboard)"
     else
       ok "AULA F75 set up (Super+K)"
@@ -2447,8 +2589,8 @@ cmd_status() {
       || warn "Font JetBrains Mono missing, Spotify, Vesktop and GRUB need it (pacman -S ttf-jetbrains-mono)"
   fi
 
-  [[ -f $REPO/assets/logo.png ]] && ok "fastfetch logo found" \
-    || warn "No fastfetch logo at assets/logo.png"
+  [[ -f $ASSETS_DIR/logo.png ]] && ok "fastfetch logo found" \
+    || warn "No fastfetch logo at ${ASSETS_DIR/#$HOME/~}/logo.png"
 
   command -v spotify >/dev/null || command -v spotify-launcher >/dev/null \
     || warn "Spotify not found, the spicetify theme needs it"
@@ -2509,15 +2651,16 @@ main() {
   done
 
   case $cmd in
-    install | i | update | up | remove | rm | uninstall | backup)
+    install | i | add | update | up | remove | rm | uninstall | backup)
       for a in "${args[@]}"; do
-        is_package "$a" || die "Unknown package: $a (available: ${PACKAGES[*]})"
+        is_package "$a" || is_module "$a" || die "Unknown module or package: $a (modules: ${MODULES[*]})"
       done
       ;;
   esac
 
   case $cmd in
     install | i) cmd_install "${args[@]}" ;;
+    add) (( ${#args[@]} )) || die "Name a module, e.g.: frame add steam (all: ${MODULES[*]})"; cmd_install "${args[@]}" ;;
     update | up) cmd_update "${args[@]}" ;;
     remove | rm | uninstall) cmd_remove "${args[@]}" ;;
     backup) cmd_backup "${args[@]}" ;;

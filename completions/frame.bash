@@ -11,8 +11,9 @@ _frame() {
         words=$(frame __complete commands 2>/dev/null)
     else
         case $cmd in
-            install | update | backup) words=$(frame __complete packages 2>/dev/null) ;;
-            remove) words=$(frame __complete installed 2>/dev/null) ;;
+            install | update | backup) words="$(frame __complete modules 2>/dev/null) $(frame __complete packages 2>/dev/null)" ;;
+            add) words=$(frame __complete modules 2>/dev/null) ;;
+            remove) words="$(frame __complete modules 2>/dev/null) $(frame __complete installed 2>/dev/null)" ;;
             restore) words="latest $(frame __complete backups 2>/dev/null)" ;;
             theme)
                 if ((COMP_CWORD == 2)); then
