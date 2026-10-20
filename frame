@@ -13,7 +13,7 @@
 #   frame boot [install|remove]  boot splash (Plymouth) and text console colors in the theme
 #   frame goxlr                  light the GoXLR in the theme's colors (goxlr-utility)
 #   frame install keyboard       AULA F75: frame-keyboard, its udev rule (sudo) and the Super+K app
-#   frame login [install|remove] the lockscreen look as the login screen (greetd, needs sudo)
+#   frame login [install|auto|remove] the lockscreen look as the login screen, or straight into Hyprland (greetd, needs sudo)
 #   frame wallpaper <args…>      passed to frame-wallpaper (backend, set, apply, …)
 #   frame spotify <args…>        passed to frame-spotify (login, logout, status)
 #   frame layout [tiling|canvas] Hyprland tiling or the infinite canvas
@@ -373,6 +373,7 @@ usage() {
     boot [install|remove] boot splash (Plymouth) and console colors in the theme (needs sudo)
     goxlr                 faders, buttons and animation of the GoXLR in the theme's colors
     login [install|remove] the lockscreen look as the login screen (greetd greeter, needs sudo)
+    login auto            no login screen at boot: greetd starts Hyprland for you (Super+L locks)
     wallpaper <…>         wallpaper backends, e.g. "frame wallpaper backend mpv"
                           (both|mpv|image; all commands: frame wallpaper help)
     spotify login         connect the Spotify Web API for the launcher (docs/spotify.md)
@@ -1496,6 +1497,41 @@ cmd_login() {
       info "If it stays black: journalctl -b -t frame-greeter -u greetd, and frame login remove brings the old one back"
       printf '\n%sDone.%s The next boot shows the frameshell login screen. frame theme set … updates its colors too.\n\n' "$c_ok" "$c_reset"
       ;;
+    auto)
+      # greetd's [initial_session] logs one user in at boot without a greeter; after a
+      # logout the [default_session] greeter still shows. The lockscreen is Super+L.
+      local user command
+      user=$(id -un)
+      command=$(login_session_command)
+      greetd_is_display_manager \
+        || warn "systemd does not start greetd as the display manager; enable it: sudo systemctl enable greetd (after disabling the other one)"
+      info "greetd ($GREETD_CONFIG) will start $command for $user at boot, without asking for a password"
+      info "Anyone who can turn the machine on gets your desktop; Super+L locks it"
+      confirm "Log in automatically at boot?" || exit 0
+      step "greetd"
+      if ! grep -q "frameshell" "$GREETD_CONFIG"; then
+        run mkdir -p "$STATE_DIR"
+        run cp "$GREETD_CONFIG" "$STATE_DIR/greetd-config.orig"
+        run sudo install -m 644 "$GREETD_CONFIG" "$GREETD_CONFIG$GREETD_BACKUP_SUFFIX"
+        ok "Original config kept at $STATE_DIR/greetd-config.orig and $GREETD_CONFIG$GREETD_BACKUP_SUFFIX"
+      fi
+      local tmp
+      tmp=$(mktemp)
+      # Keep every other section, replace initial_session
+      awk 'BEGIN{skip=0} /^\[initial_session\]/{skip=1; next} /^\[/{skip=0} !skip' "$GREETD_CONFIG" | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' >"$tmp"
+      {
+        echo
+        echo "# frameshell: straight into Hyprland at boot, no login screen (frame login auto)"
+        echo "[initial_session]"
+        echo "command = \"$command\""
+        echo "user = \"$user\""
+      } >>"$tmp"
+      run sudo install -m 644 "$tmp" "$GREETD_CONFIG"
+      rm -f "$tmp"
+      ok "Wrote $GREETD_CONFIG (initial_session → $command as $user)"
+      info "The greeter in [default_session] stays for after a logout; frame login remove brings the distro's config back"
+      printf '\n%sDone.%s The next boot goes straight to your desktop.\n\n' "$c_ok" "$c_reset"
+      ;;
     remove)
       confirm "Back to the distro's greeter?" || exit 0
       step "greetd"
@@ -1507,7 +1543,7 @@ cmd_login() {
       run sudo rm -rf "$GREETER_DIR"
       ok "Removed $GREETER_DIR"
       ;;
-    *) die "Unknown login action: $action (install or remove)" ;;
+    *) die "Unknown login action: $action (install, auto or remove)" ;;
   esac
 }
 
@@ -2665,6 +2701,9 @@ cmd_status() {
       warn "Login screen files are installed, but greetd ($greetd_config) starts something else; run frame login again"
     fi
     greetd_is_display_manager || warn "greetd is not the display manager systemd starts"
+  fi
+  if [[ -r $(greetd_config_path) ]] && grep -q '^\[initial_session\]' "$(greetd_config_path)"; then
+    ok "Boot: straight into the desktop, no login screen (frame login auto; Super+L locks)"
   fi
 
   local conflicts
