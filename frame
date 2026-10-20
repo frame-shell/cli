@@ -373,7 +373,7 @@ usage() {
     boot [install|remove] boot splash (Plymouth) and console colors in the theme (needs sudo)
     goxlr                 faders, buttons and animation of the GoXLR in the theme's colors
     login [install|remove] the lockscreen look as the login screen (greetd greeter, needs sudo)
-    login auto            no login screen at boot: greetd starts Hyprland for you (Super+L locks)
+    login auto            no greeter at boot: greetd starts Hyprland, the shell's lockscreen asks for the password
     wallpaper <…>         wallpaper backends, e.g. "frame wallpaper backend mpv"
                           (both|mpv|image; all commands: frame wallpaper help)
     spotify login         connect the Spotify Web API for the launcher (docs/spotify.md)
@@ -1505,9 +1505,9 @@ cmd_login() {
       command=$(login_session_command)
       greetd_is_display_manager \
         || warn "systemd does not start greetd as the display manager; enable it: sudo systemctl enable greetd (after disabling the other one)"
-      info "greetd ($GREETD_CONFIG) will start $command for $user at boot, without asking for a password"
-      info "Anyone who can turn the machine on gets your desktop; Super+L locks it"
-      confirm "Log in automatically at boot?" || exit 0
+      info "greetd ($GREETD_CONFIG) will start $command for $user at boot, without a greeter"
+      info "The session starts locked: the shell's own lockscreen asks for the password (hypr/frame/shell.lua)"
+      confirm "Boot straight into the locked desktop?" || exit 0
       step "greetd"
       if ! grep -q "frameshell" "$GREETD_CONFIG"; then
         run mkdir -p "$STATE_DIR"
@@ -1530,7 +1530,7 @@ cmd_login() {
       rm -f "$tmp"
       ok "Wrote $GREETD_CONFIG (initial_session → $command as $user)"
       info "The greeter in [default_session] stays for after a logout; frame login remove brings the distro's config back"
-      printf '\n%sDone.%s The next boot goes straight to your desktop.\n\n' "$c_ok" "$c_reset"
+      printf '\n%sDone.%s The next boot shows the shell\x27s lockscreen instead of the greeter.\n\n' "$c_ok" "$c_reset"
       ;;
     remove)
       confirm "Back to the distro's greeter?" || exit 0
@@ -2703,7 +2703,7 @@ cmd_status() {
     greetd_is_display_manager || warn "greetd is not the display manager systemd starts"
   fi
   if [[ -r $(greetd_config_path) ]] && grep -q '^\[initial_session\]' "$(greetd_config_path)"; then
-    ok "Boot: straight into the desktop, no login screen (frame login auto; Super+L locks)"
+    ok "Boot: no greeter, the session starts on the shell's lockscreen (frame login auto)"
   fi
 
   local conflicts
