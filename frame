@@ -107,10 +107,11 @@ declare -A DEPS=(
   # millennium (AUR) themes Steam and runs the plugin that sends its notifications to the shell;
   # python runs frame-steam-css, which recolors the library from Steam's own CSS
   [steam]="steam millennium ttf-jetbrains-mono jq python"
-  # qt6-websockets: the Spotify bridge; wf-recorder: screen recordings; noto-fonts-emoji: the
+  # qt6-websockets: the Spotify bridge; grim: screenshots; wf-recorder: screen recordings; ffmpeg:
+  # cutting screenshots out of the frozen screen and the editors' export; noto-fonts-emoji: the
   # launcher's emoji (the list itself, the alarm sound, file search, clipboard history and the
   # update check are the shell's own)
-  [quickshell]="quickshell ttf-jetbrains-mono ttf-nerd-fonts-symbols-mono wl-clipboard libpulse pciutils qt6-websockets qt6-imageformats wf-recorder noto-fonts-emoji"
+  [quickshell]="quickshell ttf-jetbrains-mono ttf-nerd-fonts-symbols-mono wl-clipboard libpulse pciutils qt6-websockets qt6-imageformats grim wf-recorder ffmpeg noto-fonts-emoji"
   # Idle lock and screen off live in the shell (lockscreen/Lock.qml), no hypridle
   [hypr]=""
   # ffmpeg makes the video thumbnails in the wallpaper app; linux-wallpaperengine
