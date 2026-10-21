@@ -132,6 +132,7 @@ declare -A DEPS=(
 # "package|what it gives you" entries, separated by ";"
 declare -A OPTIONAL_DEPS=(
   [dolphin]="konsole|the terminal panel inside Dolphin (F4);kdegraphics-thumbnailers|previews of PDFs and RAW photos"
+  [quickshell]="qt6-multimedia-ffmpeg|the recording editor (edit on a recording: cuts, pictures, blur, levels per channel)"
 )
 
 # App files outside the repo that frame touches or that belong in a backup
