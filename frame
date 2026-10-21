@@ -104,8 +104,9 @@ declare -A DEPS=(
   # curl, jq, openssl: frame-spotify, the Web API helper for the launcher
   [spicetify]="spicetify-cli ttf-jetbrains-mono curl jq openssl"
   [vencord]="vesktop ttf-jetbrains-mono jq git nodejs pnpm"
-  # millennium (AUR) themes Steam and runs the plugin that sends its notifications to the shell
-  [steam]="steam millennium ttf-jetbrains-mono jq"
+  # millennium (AUR) themes Steam and runs the plugin that sends its notifications to the shell;
+  # python runs frame-steam-css, which recolors the library from Steam's own CSS
+  [steam]="steam millennium ttf-jetbrains-mono jq python"
   # qt6-websockets: the Spotify bridge; wf-recorder: screen recordings; noto-fonts-emoji: the
   # launcher's emoji (the list itself, the alarm sound, file search, clipboard history and the
   # update check are the shell's own)
